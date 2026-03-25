@@ -473,12 +473,19 @@ func (t *TelegramClient) filterChannelParticipants(participants []tg.ChannelPart
 	}
 }
 
+func (t *TelegramClient) applyPublicJoinRule(portal *bridgev2.Portal, info *bridgev2.ChatInfo) {
+	if t.main.Config.Relay.PublicPortals && portal.RelayLoginID != "" {
+		info.JoinRule = &event.JoinRulesEventContent{JoinRule: event.JoinRulePublic}
+	}
+}
+
 func (t *TelegramClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*bridgev2.ChatInfo, error) {
 	peerType, id, topicID, err := ids.ParsePortalID(portal.ID)
 	if err != nil {
 		return nil, err
 	}
 
+	var info *bridgev2.ChatInfo
 	switch peerType {
 	case ids.PeerTypeUser:
 		return t.getDMChatInfo(ctx, id)
@@ -489,8 +496,10 @@ func (t *TelegramClient) GetChatInfo(ctx context.Context, portal *bridgev2.Porta
 		if err != nil {
 			return nil, err
 		}
-		info, _, err := t.wrapFullChatInfo(portal.ID, fullChat)
-		return info, err
+		info, _, err = t.wrapFullChatInfo(portal.ID, fullChat)
+		if err != nil {
+			return nil, err
+		}
 	case ids.PeerTypeChannel:
 		accessHash, err := t.ScopedStore.GetAccessHash(ctx, ids.PeerTypeChannel, id)
 		if err != nil {
@@ -510,31 +519,32 @@ func (t *TelegramClient) GetChatInfo(ctx context.Context, portal *bridgev2.Porta
 			if err != nil {
 				return nil, err
 			}
-			info, _, err := t.wrapChatInfo(portal.ID, channel)
+			info, _, err = t.wrapChatInfo(portal.ID, channel)
 			if err != nil {
 				return nil, err
 			}
 			t.overrideChatInfoWithTopic(info, topic)
-			return info, nil
+		} else {
+			fullChat, err := APICallWithUpdates(ctx, t, func() (*tg.MessagesChatFull, error) {
+				return t.client.API().ChannelsGetFullChannel(ctx, &tg.InputChannel{ChannelID: id, AccessHash: accessHash})
+			})
+			if err != nil {
+				return nil, err
+			}
+			var mfm *memberFetchMeta
+			info, mfm, err = t.wrapFullChatInfo(portal.ID, fullChat)
+			if err != nil {
+				return nil, err
+			}
+			if err = t.fillChannelMembers(ctx, mfm, info.Members); err != nil {
+				zerolog.Ctx(ctx).Err(err).Msg("Failed to get channel members")
+			}
 		}
-		fullChat, err := APICallWithUpdates(ctx, t, func() (*tg.MessagesChatFull, error) {
-			return t.client.API().ChannelsGetFullChannel(ctx, &tg.InputChannel{ChannelID: id, AccessHash: accessHash})
-		})
-		if err != nil {
-			return nil, err
-		}
-		info, mfm, err := t.wrapFullChatInfo(portal.ID, fullChat)
-		if err != nil {
-			return nil, err
-		}
-		err = t.fillChannelMembers(ctx, mfm, info.Members)
-		if err != nil {
-			zerolog.Ctx(ctx).Err(err).Msg("Failed to get channel members")
-		}
-		return info, nil
 	default:
 		return nil, fmt.Errorf("unsupported peer type %s", peerType)
 	}
+	t.applyPublicJoinRule(portal, info)
+	return info, nil
 }
 
 func (t *TelegramClient) syncTopics(ctx context.Context, portal *bridgev2.Portal, channelID int64) error {

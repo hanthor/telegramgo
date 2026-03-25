@@ -26,6 +26,7 @@ import (
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/commands"
 	"maunium.net/go/mautrix/bridgev2/networkid"
+	"maunium.net/go/mautrix/event"
 
 	"go.mau.fi/mautrix-telegram/pkg/connector/ids"
 	"go.mau.fi/mautrix-telegram/pkg/gotd/tg"
@@ -267,12 +268,19 @@ func fnSetRelaySpace(ce *commands.Event) {
 		return
 	}
 
+	publicPortals := ce.Bridge.Network.(*TelegramConnector).Config.Relay.PublicPortals
+
 	var set, failed int
 	for _, p := range portals {
 		if err := p.SetRelay(ce.Ctx, relay); err != nil {
 			failed++
-		} else {
-			set++
+			continue
+		}
+		set++
+		if publicPortals && p.MXID != "" {
+			_, _ = ce.Bridge.Bot.SendState(ce.Ctx, p.MXID, event.StateJoinRules, "", &event.Content{
+				Parsed: &event.JoinRulesEventContent{JoinRule: event.JoinRulePublic},
+			}, time.Time{})
 		}
 	}
 	ce.Reply(fmt.Sprintf("Set relay to %s on %d room(s)%s", relay.RemoteName, set,

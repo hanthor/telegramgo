@@ -54,6 +54,7 @@ type DeviceInfo struct {
 
 type RelayConfig struct {
 	RelayReactions bool `yaml:"relay_reactions"`
+	PublicPortals  bool `yaml:"public_portals"`
 }
 
 type TelegramConfig struct {
@@ -129,6 +130,7 @@ func upgradeConfig(helper up.Helper) {
 	helper.Copy(up.Bool, "takeout", "forward_backfill")
 	helper.Copy(up.Bool, "takeout", "backward_backfill")
 	helper.Copy(up.Bool, "relay", "relay_reactions")
+	helper.Copy(up.Bool, "relay", "public_portals")
 	helper.Copy(up.Bool, "contact_avatars")
 	helper.Copy(up.Bool, "contact_names")
 	helper.Copy(up.Int, "max_member_count")
