@@ -29,6 +29,7 @@ import (
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
+	"maunium.net/go/mautrix/bridgev2/simplevent"
 	"maunium.net/go/mautrix/event"
 
 	"go.mau.fi/mautrix-telegram/pkg/connector/ids"
@@ -534,6 +535,48 @@ func (t *TelegramClient) GetChatInfo(ctx context.Context, portal *bridgev2.Porta
 	default:
 		return nil, fmt.Errorf("unsupported peer type %s", peerType)
 	}
+}
+
+func (t *TelegramClient) syncTopics(ctx context.Context, portal *bridgev2.Portal, channelID int64) error {
+	accessHash, err := t.ScopedStore.GetAccessHash(ctx, ids.PeerTypeChannel, channelID)
+	if err != nil {
+		return err
+	}
+
+	resp, err := APICallWithUpdates(ctx, t, func() (*tg.MessagesForumTopics, error) {
+		return t.client.API().MessagesGetForumTopics(ctx, &tg.MessagesGetForumTopicsRequest{
+			Peer: &tg.InputPeerChannel{ChannelID: channelID, AccessHash: accessHash},
+		})
+	})
+	if err != nil {
+		return err
+	}
+
+	for _, topic := range resp.GetTopics() {
+		topicObj, ok := topic.(*tg.ForumTopic)
+		if !ok {
+			continue
+		}
+		topicID := topicObj.ID
+		portalKey := t.makePortalKeyFromID(ids.PeerTypeChannel, channelID, topicID)
+
+		info, err := t.GetChatInfo(ctx, &bridgev2.Portal{ID: portalKey.ID, Metadata: &PortalMetadata{}})
+		if err != nil {
+			continue
+		}
+
+		res := t.main.Bridge.QueueRemoteEvent(t.userLogin, &simplevent.ChatResync{
+			ChatInfo: info,
+			EventMeta: simplevent.EventMeta{
+				Type:         bridgev2.RemoteEventChatResync,
+				PortalKey:    portalKey,
+				CreatePortal: true,
+			},
+		})
+		_ = resultToError(res)
+	}
+
+	return nil
 }
 
 func getTopicInfoFromResponse(resp *tg.MessagesForumTopics, channelID int64, topicID int) (channel *tg.Channel, topic *tg.ForumTopic, err error) {

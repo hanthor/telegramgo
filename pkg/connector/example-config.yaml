@@ -80,6 +80,19 @@ takeout:
     # This only affects the backfill queue, which is only available on Beeper.
     backward_backfill: false
 
+# Relaybot settings.
+relay:
+    # Whether or not relaybot support is enabled.
+    enabled: false
+    # Whether or not only bridge admins can use the relaybot.
+    admin_only: false
+    # The message format for relayed messages.
+    # {{ .SenderName }} is the display name of the Matrix user.
+    # {{ .Message }} is the message content.
+    message_format: "<b>{{ .SenderName }}</b>: {{ .Message }}"
+    # Whether or not to relay reactions from relayed Matrix users.
+    relay_reactions: false
+
 # Maximum number of participants in chats to bridge. Only applies when the
 # portal is being created. If there are more members when trying to create a
 # room, the room creation will be cancelled.

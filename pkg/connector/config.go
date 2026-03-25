@@ -31,25 +31,11 @@ import (
 
 var _ bridgev2.ConfigValidatingNetwork = (*TelegramConnector)(nil)
 
-type MemberListConfig struct {
-	MaxInitialSync        int  `yaml:"max_initial_sync"`
-	SyncBroadcastChannels bool `yaml:"sync_broadcast_channels"`
-	SkipDeleted           bool `yaml:"skip_deleted"`
-}
-
-func (c MemberListConfig) NormalizedMaxInitialSync() int {
-	if c.MaxInitialSync < 0 {
-		return 10_000
-	}
-	return c.MaxInitialSync
-}
-
-type DeviceInfo struct {
-	DeviceModel    string `yaml:"device_model"`
-	SystemVersion  string `yaml:"system_version"`
-	AppVersion     string `yaml:"app_version"`
-	SystemLangCode string `yaml:"system_lang_code"`
-	LangCode       string `yaml:"lang_code"`
+type RelayConfig struct {
+	Enabled        bool   `yaml:"enabled"`
+	AdminOnly      bool   `yaml:"admin_only"`
+	MessageFormat  string `yaml:"message_format"`
+	RelayReactions bool   `yaml:"relay_reactions"`
 }
 
 type TelegramConfig struct {
@@ -77,6 +63,8 @@ type TelegramConfig struct {
 		ForwardBackfill  bool `yaml:"forward_backfill"`
 		BackwardBackfill bool `yaml:"backward_backfill"`
 	} `yaml:"takeout"`
+
+	Relay RelayConfig `yaml:"relay"`
 
 	ContactAvatars                       bool                `yaml:"contact_avatars"`
 	ContactNames                         bool                `yaml:"contact_names"`
@@ -122,6 +110,10 @@ func upgradeConfig(helper up.Helper) {
 	helper.Copy(up.Bool, "takeout", "dialog_sync")
 	helper.Copy(up.Bool, "takeout", "forward_backfill")
 	helper.Copy(up.Bool, "takeout", "backward_backfill")
+	helper.Copy(up.Bool, "relay", "enabled")
+	helper.Copy(up.Bool, "relay", "admin_only")
+	helper.Copy(up.Str, "relay", "message_format")
+	helper.Copy(up.Bool, "relay", "relay_reactions")
 	helper.Copy(up.Bool, "contact_avatars")
 	helper.Copy(up.Bool, "contact_names")
 	helper.Copy(up.Int, "max_member_count")

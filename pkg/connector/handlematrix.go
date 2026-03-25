@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"html"
 	"image"
 	"image/jpeg"
 	_ "image/jpeg"
@@ -304,7 +305,28 @@ func (t *TelegramClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.
 
 	noWebpage := msg.Content.BeeperLinkPreviews != nil && len(msg.Content.BeeperLinkPreviews) == 0
 
-	message, entities := matrixfmt.Parse(ctx, t.matrixParser, msg.Content)
+	content := *msg.Content
+	isRelay := msg.OrigSender.UserID != t.userLogin.UserMXID
+	if isRelay && t.main.Config.Relay.Enabled {
+		if t.main.Config.Relay.AdminOnly && !msg.OrigSender.IsBridgeAdmin {
+			return nil, fmt.Errorf("relay is restricted to admins")
+		}
+		senderName := msg.OrigSender.Name
+		if senderName == "" {
+			senderName = string(msg.OrigSender.UserID)
+		}
+		if content.MsgType.IsMedia() && (content.FileName == "" || content.FileName == content.Body) {
+			content.FormattedBody = fmt.Sprintf("<b>%s</b>", html.EscapeString(senderName))
+			content.Body = senderName
+			content.Format = event.FormatHTML
+		} else if content.Format == event.FormatHTML {
+			content.FormattedBody = fmt.Sprintf("<b>%s</b>: %s", html.EscapeString(senderName), content.FormattedBody)
+			content.Body = fmt.Sprintf("%s: %s", senderName, content.Body)
+		} else {
+			content.Body = fmt.Sprintf("%s: %s", senderName, content.Body)
+		}
+	}
+	message, entities := matrixfmt.Parse(ctx, t.matrixParser, &content)
 
 	var replyTo tg.InputReplyToClass
 	if msg.ReplyTo != nil {
@@ -328,7 +350,7 @@ func (t *TelegramClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.
 	var updates tg.UpdatesClass
 	if msg.Event.Type == event.EventSticker {
 		var media tg.InputMediaClass
-		media, err = t.transferMediaToTelegram(ctx, msg.Content, true)
+		media, err = t.transferMediaToTelegram(ctx, &content, true)
 		if err != nil {
 			return nil, err
 		}
@@ -341,7 +363,7 @@ func (t *TelegramClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.
 			RandomID: randomID,
 		})
 	} else {
-		switch msg.Content.MsgType {
+		switch content.MsgType {
 		case event.MsgText, event.MsgNotice, event.MsgEmote:
 			updates, err = t.client.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
 				Peer:      peer,
@@ -353,7 +375,7 @@ func (t *TelegramClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.
 			})
 		case event.MsgImage, event.MsgFile, event.MsgAudio, event.MsgVideo:
 			var media tg.InputMediaClass
-			media, err = t.transferMediaToTelegram(ctx, msg.Content, false)
+			media, err = t.transferMediaToTelegram(ctx, &content, false)
 			if err != nil {
 				return nil, err
 			}
@@ -367,7 +389,7 @@ func (t *TelegramClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.
 			})
 		case event.MsgLocation:
 			var uri GeoURI
-			uri, err = ParseGeoURI(msg.Content.GeoURI)
+			uri, err = ParseGeoURI(content.GeoURI)
 			if err != nil {
 				return nil, err
 			}
@@ -387,7 +409,7 @@ func (t *TelegramClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.
 				RandomID: randomID,
 			})
 		default:
-			return nil, fmt.Errorf("unsupported message type %s", msg.Content.MsgType)
+			return nil, fmt.Errorf("unsupported message type %s", content.MsgType)
 		}
 	}
 	if err != nil {
@@ -402,7 +424,7 @@ func (t *TelegramClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.
 	case *tg.UpdateShortSentMessage:
 		tgMessageID = sentMessage.ID
 		tgDate = sentMessage.Date
-		hasher.Write([]byte(msg.Content.Body))
+		hasher.Write([]byte(content.Body))
 	case *tg.Updates:
 		tgDate = sentMessage.Date
 		for _, u := range sentMessage.Updates {
@@ -466,32 +488,53 @@ func (t *TelegramClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.Mat
 		return err
 	}
 
-	message, entities := matrixfmt.Parse(ctx, t.matrixParser, msg.Content)
+	content := *msg.Content
+	isRelay := msg.OrigSender.UserID != t.userLogin.UserMXID
+	if isRelay && t.main.Config.Relay.Enabled {
+		if t.main.Config.Relay.AdminOnly && !msg.OrigSender.IsBridgeAdmin {
+			return fmt.Errorf("relay is restricted to admins")
+		}
+		senderName := msg.OrigSender.Name
+		if senderName == "" {
+			senderName = string(msg.OrigSender.UserID)
+		}
+		if content.MsgType.IsMedia() && (content.FileName == "" || content.FileName == content.Body) {
+			content.FormattedBody = fmt.Sprintf("<b>%s</b>", html.EscapeString(senderName))
+			content.Body = senderName
+			content.Format = event.FormatHTML
+		} else if content.Format == event.FormatHTML {
+			content.FormattedBody = fmt.Sprintf("<b>%s</b>: %s", html.EscapeString(senderName), content.FormattedBody)
+			content.Body = fmt.Sprintf("%s: %s", senderName, content.Body)
+		} else {
+			content.Body = fmt.Sprintf("%s: %s", senderName, content.Body)
+		}
+	}
+	message, entities := matrixfmt.Parse(ctx, t.matrixParser, &content)
 
 	var newContentURI id.ContentURIString
 	req := tg.MessagesEditMessageRequest{
 		Peer:      peer,
-		NoWebpage: msg.Content.BeeperLinkPreviews != nil && len(msg.Content.BeeperLinkPreviews) == 0,
+		NoWebpage: content.BeeperLinkPreviews != nil && len(content.BeeperLinkPreviews) == 0,
 		Message:   message,
 		Entities:  entities,
 		ID:        targetID,
 	}
-	if msg.Content.MsgType.IsMedia() {
-		newContentURI = msg.Content.URL
+	if content.MsgType.IsMedia() {
+		newContentURI = content.URL
 		if newContentURI == "" {
-			newContentURI = msg.Content.File.URL
+			newContentURI = content.File.URL
 		}
 		if msg.EditTarget.Metadata.(*MessageMetadata).ContentURI == newContentURI {
 			log.Info().Msg("media URI unchanged, skipping re-upload, just editing text")
 		} else {
 			log.Info().Msg("media URI changed, re-uploading media")
-			req.Media, err = t.transferMediaToTelegram(ctx, msg.Content, false)
+			req.Media, err = t.transferMediaToTelegram(ctx, &content, false)
 			if err != nil {
 				return err
 			}
 		}
-	} else if !msg.Content.MsgType.IsText() {
-		return fmt.Errorf("editing message type %s is unsupported", msg.Content.MsgType)
+	} else if !content.MsgType.IsText() {
+		return fmt.Errorf("editing message type %s is unsupported", content.MsgType)
 	}
 	updates, err := t.client.API().MessagesEditMessage(ctx, &req)
 	if err != nil {
@@ -502,7 +545,7 @@ func (t *TelegramClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.Mat
 
 	switch sentMessage := updates.(type) {
 	case *tg.UpdateShortSentMessage:
-		hasher.Write([]byte(msg.Content.Body))
+		hasher.Write([]byte(content.Body))
 	case *tg.Updates:
 		for _, u := range sentMessage.Updates {
 			switch update := u.(type) {
@@ -605,6 +648,15 @@ func (t *TelegramClient) appendEmojiID(reactionList []tg.ReactionClass, emojiID 
 }
 
 func (t *TelegramClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (reaction *database.Reaction, err error) {
+	isRelay := msg.OrigSender.UserID != t.userLogin.UserMXID
+	if isRelay {
+		if !t.main.Config.Relay.Enabled || !t.main.Config.Relay.RelayReactions {
+			return nil, nil
+		}
+		if t.main.Config.Relay.AdminOnly && !msg.OrigSender.IsBridgeAdmin {
+			return nil, nil
+		}
+	}
 	peer, _, err := t.inputPeerForPortalID(ctx, msg.Portal.ID)
 	if err != nil {
 		return nil, err
@@ -642,6 +694,15 @@ func (t *TelegramClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2
 }
 
 func (t *TelegramClient) HandleMatrixReactionRemove(ctx context.Context, msg *bridgev2.MatrixReactionRemove) error {
+	isRelay := msg.OrigSender.UserID != t.userLogin.UserMXID
+	if isRelay {
+		if !t.main.Config.Relay.Enabled || !t.main.Config.Relay.RelayReactions {
+			return nil
+		}
+		if t.main.Config.Relay.AdminOnly && !msg.OrigSender.IsBridgeAdmin {
+			return nil
+		}
+	}
 	if msg.Portal.RoomType == database.RoomTypeSpace {
 		return fmt.Errorf("can't send messages to space portals")
 	}
