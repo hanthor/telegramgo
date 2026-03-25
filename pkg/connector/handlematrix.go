@@ -306,15 +306,8 @@ func (t *TelegramClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.
 	noWebpage := msg.Content.BeeperLinkPreviews != nil && len(msg.Content.BeeperLinkPreviews) == 0
 
 	content := *msg.Content
-	isRelay := msg.OrigSender.UserID != t.userLogin.UserMXID
-	if isRelay && t.main.Config.Relay.Enabled {
-		if t.main.Config.Relay.AdminOnly && !msg.OrigSender.IsBridgeAdmin {
-			return nil, fmt.Errorf("relay is restricted to admins")
-		}
-		senderName := msg.OrigSender.Name
-		if senderName == "" {
-			senderName = string(msg.OrigSender.UserID)
-		}
+	if msg.OrigSender != nil && t.main.Config.Relay.Enabled {
+		senderName := msg.OrigSender.FormattedName
 		if content.MsgType.IsMedia() && (content.FileName == "" || content.FileName == content.Body) {
 			content.FormattedBody = fmt.Sprintf("<b>%s</b>", html.EscapeString(senderName))
 			content.Body = senderName
@@ -489,15 +482,8 @@ func (t *TelegramClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.Mat
 	}
 
 	content := *msg.Content
-	isRelay := msg.OrigSender.UserID != t.userLogin.UserMXID
-	if isRelay && t.main.Config.Relay.Enabled {
-		if t.main.Config.Relay.AdminOnly && !msg.OrigSender.IsBridgeAdmin {
-			return fmt.Errorf("relay is restricted to admins")
-		}
-		senderName := msg.OrigSender.Name
-		if senderName == "" {
-			senderName = string(msg.OrigSender.UserID)
-		}
+	if msg.OrigSender != nil && t.main.Config.Relay.Enabled {
+		senderName := msg.OrigSender.FormattedName
 		if content.MsgType.IsMedia() && (content.FileName == "" || content.FileName == content.Body) {
 			content.FormattedBody = fmt.Sprintf("<b>%s</b>", html.EscapeString(senderName))
 			content.Body = senderName
@@ -648,12 +634,8 @@ func (t *TelegramClient) appendEmojiID(reactionList []tg.ReactionClass, emojiID 
 }
 
 func (t *TelegramClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (reaction *database.Reaction, err error) {
-	isRelay := msg.OrigSender.UserID != t.userLogin.UserMXID
-	if isRelay {
+	if msg.OrigSender != nil {
 		if !t.main.Config.Relay.Enabled || !t.main.Config.Relay.RelayReactions {
-			return nil, nil
-		}
-		if t.main.Config.Relay.AdminOnly && !msg.OrigSender.IsBridgeAdmin {
 			return nil, nil
 		}
 	}
@@ -694,12 +676,8 @@ func (t *TelegramClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2
 }
 
 func (t *TelegramClient) HandleMatrixReactionRemove(ctx context.Context, msg *bridgev2.MatrixReactionRemove) error {
-	isRelay := msg.OrigSender.UserID != t.userLogin.UserMXID
-	if isRelay {
+	if msg.OrigSender != nil {
 		if !t.main.Config.Relay.Enabled || !t.main.Config.Relay.RelayReactions {
-			return nil
-		}
-		if t.main.Config.Relay.AdminOnly && !msg.OrigSender.IsBridgeAdmin {
 			return nil
 		}
 	}

@@ -28,6 +28,7 @@ import (
 	"go.mau.fi/mautrix-telegram/pkg/connector/ids"
 	"go.mau.fi/mautrix-telegram/pkg/gotd/tg"
 )
+
 var cmdSync = &commands.FullHandler{
 	Func: fnSync,
 	Name: "sync",
@@ -59,7 +60,12 @@ func fnSync(ce *commands.Event) {
 			ce.Reply("This portal is not a channel/supergroup.")
 			return
 		}
-		client := ce.UserLogin.Client.(*TelegramClient)
+		logins := ce.User.GetUserLogins()
+		if len(logins) == 0 {
+			ce.Reply("You are not logged in.")
+			return
+		}
+		client := logins[0].Client.(*TelegramClient)
 		ce.Reply("Synchronizing topics for this forum...")
 		go func() {
 			err := client.syncTopics(ce.Ctx, ce.Portal, id)
@@ -73,7 +79,6 @@ func fnSync(ce *commands.Event) {
 	}
 
 	var wg sync.WaitGroup
-...
 	for _, login := range ce.User.GetUserLogins() {
 		client := login.Client.(*TelegramClient)
 		if only == "" || only == "chats" {
@@ -99,7 +104,7 @@ func fnSync(ce *commands.Event) {
 			ce.Reply("Synchronizing your info...")
 			wg.Add(1)
 			go func() {
-				wg.Done()
+				defer wg.Done()
 				if users, err := client.client.API().UsersGetUsers(ce.Ctx, []tg.InputUserClass{&tg.InputUserSelf{}}); err != nil {
 					ce.Reply("Failed to get your info for %s: %v", login.ID, err)
 				} else if len(users) == 0 {
@@ -143,8 +148,8 @@ func fnPlumbTopic(ce *commands.Event) {
 		return
 	}
 
-	portalKey := ids.MakeTopicPortalID(channelID, topicID)
-	portal, err := ce.Bridge.GetPortalByKey(ce.Ctx, networkid.PortalKey{ID: portalKey})
+	portalKey := networkid.PortalKey{ID: ids.MakeTopicPortalID(channelID, topicID)}
+	portal, err := ce.Bridge.GetPortalByKey(ce.Ctx, portalKey)
 	if err != nil {
 		ce.Reply("Failed to get portal: %v", err)
 		return
@@ -159,7 +164,11 @@ func fnPlumbTopic(ce *commands.Event) {
 		return
 	}
 
-	existingPortal := ce.Bridge.GetPortalByMXID(ce.Ctx, ce.RoomID)
+	existingPortal, err := ce.Bridge.GetPortalByMXID(ce.Ctx, ce.RoomID)
+	if err != nil {
+		ce.Reply("Failed to check if room is already linked: %v", err)
+		return
+	}
 	if existingPortal != nil {
 		ce.Reply("This room is already linked to another portal: %s. Unbridge it first if you want to re-link it.", existingPortal.ID)
 		return
@@ -172,13 +181,18 @@ func fnPlumbTopic(ce *commands.Event) {
 		return
 	}
 
-	client := ce.UserLogin.Client.(*TelegramClient)
+	logins := ce.User.GetUserLogins()
+	if len(logins) == 0 {
+		ce.Reply("Successfully linked room, but you are not logged in to fetch topic info. You may need to manually sync the room later.")
+		return
+	}
+	client := logins[0].Client.(*TelegramClient)
 	info, err := client.GetChatInfo(ce.Ctx, portal)
 	if err != nil {
 		ce.Reply("Successfully linked room, but failed to fetch topic info: %v. You may need to manually sync the room.", err)
 		return
 	}
 
-	portal.UpdateInfo(ce.Ctx, info, ce.UserLogin, nil, time.Time{})
+	portal.UpdateInfo(ce.Ctx, info, logins[0], nil, time.Time{})
 	ce.Reply("Successfully linked this room to topic %d in channel %d.", topicID, channelID)
 }

@@ -560,7 +560,11 @@ func (t *TelegramClient) syncTopics(ctx context.Context, portal *bridgev2.Portal
 		topicID := topicObj.ID
 		portalKey := t.makePortalKeyFromID(ids.PeerTypeChannel, channelID, topicID)
 
-		info, err := t.GetChatInfo(ctx, &bridgev2.Portal{ID: portalKey.ID, Metadata: &PortalMetadata{}})
+		portal, err := t.main.Bridge.GetPortalByKey(ctx, portalKey)
+		if err != nil {
+			continue
+		}
+		info, err := t.GetChatInfo(ctx, portal)
 		if err != nil {
 			continue
 		}
