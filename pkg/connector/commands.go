@@ -17,11 +17,13 @@
 package connector
 
 import (
+	"fmt"
 	"slices"
 	"strconv"
 	"sync"
 	"time"
 
+	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/commands"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 
@@ -195,4 +197,89 @@ func fnPlumbTopic(ce *commands.Event) {
 
 	portal.UpdateInfo(ce.Ctx, info, logins[0], nil, time.Time{})
 	ce.Reply("Successfully linked this room to topic %d in channel %d.", topicID, channelID)
+}
+
+var cmdSetRelaySpace = &commands.FullHandler{
+	Func: fnSetRelaySpace,
+	Name: "set-relay-space",
+	Help: commands.HelpMeta{
+		Section:     commands.HelpSectionChats,
+		Description: "Set the default relay on this portal and all its child topic rooms.",
+	},
+	RequiresPortal: true,
+	RequiresAdmin:  true,
+}
+
+func fnSetRelaySpace(ce *commands.Event) {
+	if !ce.Bridge.Config.Relay.Enabled {
+		ce.Reply("This bridge does not allow relay mode")
+		return
+	}
+	if len(ce.Bridge.Config.Relay.DefaultRelays) == 0 {
+		ce.Reply("No default_relays configured in bridge config")
+		return
+	}
+
+	// If run from a topic room, walk up to the parent space first
+	spacePortal := ce.Portal
+	if ce.Portal.ParentKey.ID != "" {
+		parent, err := ce.Bridge.GetPortalByKey(ce.Ctx, ce.Portal.ParentKey)
+		if err == nil && parent != nil {
+			spacePortal = parent
+		}
+	}
+
+	// Collect the space plus all children
+	portals := []*bridgev2.Portal{spacePortal}
+	children, err := ce.Bridge.DB.Portal.GetChildren(ce.Ctx, spacePortal.PortalKey)
+	if err != nil {
+		ce.Reply("Failed to get child portals: %v", err)
+		return
+	}
+	for _, child := range children {
+		p, err := ce.Bridge.GetPortalByKey(ce.Ctx, child.PortalKey)
+		if err != nil || p == nil {
+			continue
+		}
+		portals = append(portals, p)
+	}
+
+	// Find the relay login from default_relays
+	logins, err := ce.Bridge.GetUserLoginsInPortal(ce.Ctx, ce.Portal.PortalKey)
+	if err != nil {
+		ce.Reply("Failed to get logins in portal: %v", err)
+		return
+	}
+	var relay *bridgev2.UserLogin
+	for _, loginID := range ce.Bridge.Config.Relay.DefaultRelays {
+		for _, login := range logins {
+			if login.ID == loginID {
+				relay = login
+				break
+			}
+		}
+		if relay != nil {
+			break
+		}
+	}
+	if relay == nil {
+		ce.Reply("None of the configured default relay users are in this portal")
+		return
+	}
+
+	var set, failed int
+	for _, p := range portals {
+		if err := p.SetRelay(ce.Ctx, relay); err != nil {
+			failed++
+		} else {
+			set++
+		}
+	}
+	ce.Reply(fmt.Sprintf("Set relay to %s on %d room(s)%s", relay.RemoteName, set,
+		func() string {
+			if failed > 0 {
+				return fmt.Sprintf(", failed on %d", failed)
+			}
+			return ""
+		}()))
 }

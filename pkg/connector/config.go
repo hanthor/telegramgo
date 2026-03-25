@@ -53,10 +53,7 @@ type DeviceInfo struct {
 }
 
 type RelayConfig struct {
-	Enabled        bool   `yaml:"enabled"`
-	AdminOnly      bool   `yaml:"admin_only"`
-	MessageFormat  string `yaml:"message_format"`
-	RelayReactions bool   `yaml:"relay_reactions"`
+	RelayReactions bool `yaml:"relay_reactions"`
 }
 
 type TelegramConfig struct {
@@ -131,9 +128,6 @@ func upgradeConfig(helper up.Helper) {
 	helper.Copy(up.Bool, "takeout", "dialog_sync")
 	helper.Copy(up.Bool, "takeout", "forward_backfill")
 	helper.Copy(up.Bool, "takeout", "backward_backfill")
-	helper.Copy(up.Bool, "relay", "enabled")
-	helper.Copy(up.Bool, "relay", "admin_only")
-	helper.Copy(up.Str, "relay", "message_format")
 	helper.Copy(up.Bool, "relay", "relay_reactions")
 	helper.Copy(up.Bool, "contact_avatars")
 	helper.Copy(up.Bool, "contact_names")

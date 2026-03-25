@@ -22,7 +22,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"html"
 	"image"
 	"image/jpeg"
 	_ "image/jpeg"
@@ -306,19 +305,6 @@ func (t *TelegramClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.
 	noWebpage := msg.Content.BeeperLinkPreviews != nil && len(msg.Content.BeeperLinkPreviews) == 0
 
 	content := *msg.Content
-	if msg.OrigSender != nil && t.main.Config.Relay.Enabled {
-		senderName := msg.OrigSender.FormattedName
-		if content.MsgType.IsMedia() && (content.FileName == "" || content.FileName == content.Body) {
-			content.FormattedBody = fmt.Sprintf("<b>%s</b>", html.EscapeString(senderName))
-			content.Body = senderName
-			content.Format = event.FormatHTML
-		} else if content.Format == event.FormatHTML {
-			content.FormattedBody = fmt.Sprintf("<b>%s</b>: %s", html.EscapeString(senderName), content.FormattedBody)
-			content.Body = fmt.Sprintf("%s: %s", senderName, content.Body)
-		} else {
-			content.Body = fmt.Sprintf("%s: %s", senderName, content.Body)
-		}
-	}
 	message, entities := matrixfmt.Parse(ctx, t.matrixParser, &content)
 
 	var replyTo tg.InputReplyToClass
@@ -482,19 +468,6 @@ func (t *TelegramClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.Mat
 	}
 
 	content := *msg.Content
-	if msg.OrigSender != nil && t.main.Config.Relay.Enabled {
-		senderName := msg.OrigSender.FormattedName
-		if content.MsgType.IsMedia() && (content.FileName == "" || content.FileName == content.Body) {
-			content.FormattedBody = fmt.Sprintf("<b>%s</b>", html.EscapeString(senderName))
-			content.Body = senderName
-			content.Format = event.FormatHTML
-		} else if content.Format == event.FormatHTML {
-			content.FormattedBody = fmt.Sprintf("<b>%s</b>: %s", html.EscapeString(senderName), content.FormattedBody)
-			content.Body = fmt.Sprintf("%s: %s", senderName, content.Body)
-		} else {
-			content.Body = fmt.Sprintf("%s: %s", senderName, content.Body)
-		}
-	}
 	message, entities := matrixfmt.Parse(ctx, t.matrixParser, &content)
 
 	var newContentURI id.ContentURIString
@@ -634,10 +607,8 @@ func (t *TelegramClient) appendEmojiID(reactionList []tg.ReactionClass, emojiID 
 }
 
 func (t *TelegramClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2.MatrixReaction) (reaction *database.Reaction, err error) {
-	if msg.OrigSender != nil {
-		if !t.main.Config.Relay.Enabled || !t.main.Config.Relay.RelayReactions {
-			return nil, nil
-		}
+	if msg.OrigSender != nil && !t.main.Config.Relay.RelayReactions {
+		return nil, nil
 	}
 	peer, _, err := t.inputPeerForPortalID(ctx, msg.Portal.ID)
 	if err != nil {
@@ -676,10 +647,8 @@ func (t *TelegramClient) HandleMatrixReaction(ctx context.Context, msg *bridgev2
 }
 
 func (t *TelegramClient) HandleMatrixReactionRemove(ctx context.Context, msg *bridgev2.MatrixReactionRemove) error {
-	if msg.OrigSender != nil {
-		if !t.main.Config.Relay.Enabled || !t.main.Config.Relay.RelayReactions {
-			return nil
-		}
+	if msg.OrigSender != nil && !t.main.Config.Relay.RelayReactions {
+		return nil
 	}
 	if msg.Portal.RoomType == database.RoomTypeSpace {
 		return fmt.Errorf("can't send messages to space portals")
