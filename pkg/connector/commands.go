@@ -272,6 +272,21 @@ func fnSetRelaySpace(ce *commands.Event) {
 	publicPortals := cfg.PublicPortals
 	callLinks := cfg.CallLinks
 
+	// If public_portals is enabled:
+	//   - space itself gets join_rule: public
+	//   - child rooms get join_rule: restricted (space members only)
+	var spaceJoinRule, childJoinRule *event.JoinRulesEventContent
+	if publicPortals && spacePortal.MXID != "" {
+		spaceJoinRule = &event.JoinRulesEventContent{JoinRule: event.JoinRulePublic}
+		childJoinRule = &event.JoinRulesEventContent{
+			JoinRule: event.JoinRuleRestricted,
+			Allow: []event.JoinRuleAllow{{
+				Type:   event.JoinRuleAllowRoomMembership,
+				RoomID: spacePortal.MXID,
+			}},
+		}
+	}
+
 	var set, failed int
 	for _, p := range portals {
 		if err := p.SetRelay(ce.Ctx, relay); err != nil {
@@ -282,9 +297,15 @@ func fnSetRelaySpace(ce *commands.Event) {
 		if p.MXID == "" {
 			continue
 		}
-		if publicPortals {
+		var joinRule *event.JoinRulesEventContent
+		if p.ID == spacePortal.ID {
+			joinRule = spaceJoinRule
+		} else {
+			joinRule = childJoinRule
+		}
+		if joinRule != nil {
 			_, _ = ce.Bridge.Bot.SendState(ce.Ctx, p.MXID, event.StateJoinRules, "", &event.Content{
-				Parsed: &event.JoinRulesEventContent{JoinRule: event.JoinRulePublic},
+				Parsed: joinRule,
 			}, time.Time{})
 		}
 		if callLinks {

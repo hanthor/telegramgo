@@ -474,9 +474,26 @@ func (t *TelegramClient) filterChannelParticipants(participants []tg.ChannelPart
 }
 
 func (t *TelegramClient) applyPublicJoinRule(portal *bridgev2.Portal, info *bridgev2.ChatInfo) {
-	if t.main.Config.Relay.PublicPortals && portal.RelayLoginID != "" {
-		info.JoinRule = &event.JoinRulesEventContent{JoinRule: event.JoinRulePublic}
+	if !t.main.Config.Relay.PublicPortals || portal.RelayLoginID == "" {
+		return
 	}
+	if portal.ParentKey.ID != "" {
+		// Child room (topic): restricted to space members only.
+		// We need the parent space's MXID for the allow list; look it up if available.
+		parentPortal, err := t.main.Bridge.GetPortalByKey(context.Background(), portal.ParentKey)
+		if err == nil && parentPortal != nil && parentPortal.MXID != "" {
+			info.JoinRule = &event.JoinRulesEventContent{
+				JoinRule: event.JoinRuleRestricted,
+				Allow: []event.JoinRuleAllow{{
+					Type:   event.JoinRuleAllowRoomMembership,
+					RoomID: parentPortal.MXID,
+				}},
+			}
+			return
+		}
+	}
+	// Space or standalone room: public.
+	info.JoinRule = &event.JoinRulesEventContent{JoinRule: event.JoinRulePublic}
 }
 
 func (t *TelegramClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*bridgev2.ChatInfo, error) {
