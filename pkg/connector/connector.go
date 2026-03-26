@@ -43,6 +43,7 @@ func (tg *TelegramConnector) Init(bridge *bridgev2.Bridge) {
 	tg.Bridge = bridge
 	processor := tg.Bridge.Commands.(*commands.Processor)
 	processor.AddHandlers(cmdSync, cmdPlumbTopic, cmdSetRelaySpace)
+	tg.registerCallHandlers()
 }
 
 func (tg *TelegramConnector) Start(ctx context.Context) error {

@@ -268,7 +268,9 @@ func fnSetRelaySpace(ce *commands.Event) {
 		return
 	}
 
-	publicPortals := ce.Bridge.Network.(*TelegramConnector).Config.Relay.PublicPortals
+	cfg := ce.Bridge.Network.(*TelegramConnector).Config.Relay
+	publicPortals := cfg.PublicPortals
+	callLinks := cfg.CallLinks
 
 	var set, failed int
 	for _, p := range portals {
@@ -277,9 +279,17 @@ func fnSetRelaySpace(ce *commands.Event) {
 			continue
 		}
 		set++
-		if publicPortals && p.MXID != "" {
+		if p.MXID == "" {
+			continue
+		}
+		if publicPortals {
 			_, _ = ce.Bridge.Bot.SendState(ce.Ctx, p.MXID, event.StateJoinRules, "", &event.Content{
 				Parsed: &event.JoinRulesEventContent{JoinRule: event.JoinRulePublic},
+			}, time.Time{})
+		}
+		if callLinks {
+			_, _ = ce.Bridge.Bot.SendState(ce.Ctx, p.MXID, event.StateGuestAccess, "", &event.Content{
+				Parsed: &event.GuestAccessEventContent{GuestAccess: event.GuestAccessCanJoin},
 			}, time.Time{})
 		}
 	}

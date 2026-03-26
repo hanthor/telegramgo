@@ -94,6 +94,9 @@ relay:
     relay_reactions: false
     # Whether to make portals publicly joinable when relay mode is set on them.
     public_portals: false
+    # Whether to post an Element Call join link to Telegram when a call starts.
+    # Requires allow_guest_access: true in Synapse and public_portals: true.
+    call_links: false
 
 # Maximum number of participants in chats to bridge. Only applies when the
 # portal is being created. If there are more members when trying to create a
