@@ -17,17 +17,21 @@
 package connector
 
 import (
+	"fmt"
 	"slices"
 	"strconv"
 	"sync"
 	"time"
 
+	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/commands"
 	"maunium.net/go/mautrix/bridgev2/networkid"
+	"maunium.net/go/mautrix/event"
 
 	"go.mau.fi/mautrix-telegram/pkg/connector/ids"
 	"go.mau.fi/mautrix-telegram/pkg/gotd/tg"
 )
+
 var cmdSync = &commands.FullHandler{
 	Func: fnSync,
 	Name: "sync",
@@ -59,7 +63,12 @@ func fnSync(ce *commands.Event) {
 			ce.Reply("This portal is not a channel/supergroup.")
 			return
 		}
-		client := ce.UserLogin.Client.(*TelegramClient)
+		logins := ce.User.GetUserLogins()
+		if len(logins) == 0 {
+			ce.Reply("You are not logged in.")
+			return
+		}
+		client := logins[0].Client.(*TelegramClient)
 		ce.Reply("Synchronizing topics for this forum...")
 		go func() {
 			err := client.syncTopics(ce.Ctx, ce.Portal, id)
@@ -73,7 +82,6 @@ func fnSync(ce *commands.Event) {
 	}
 
 	var wg sync.WaitGroup
-...
 	for _, login := range ce.User.GetUserLogins() {
 		client := login.Client.(*TelegramClient)
 		if only == "" || only == "chats" {
@@ -99,7 +107,7 @@ func fnSync(ce *commands.Event) {
 			ce.Reply("Synchronizing your info...")
 			wg.Add(1)
 			go func() {
-				wg.Done()
+				defer wg.Done()
 				if users, err := client.client.API().UsersGetUsers(ce.Ctx, []tg.InputUserClass{&tg.InputUserSelf{}}); err != nil {
 					ce.Reply("Failed to get your info for %s: %v", login.ID, err)
 				} else if len(users) == 0 {
@@ -143,8 +151,8 @@ func fnPlumbTopic(ce *commands.Event) {
 		return
 	}
 
-	portalKey := ids.MakeTopicPortalID(channelID, topicID)
-	portal, err := ce.Bridge.GetPortalByKey(ce.Ctx, networkid.PortalKey{ID: portalKey})
+	portalKey := networkid.PortalKey{ID: ids.MakeTopicPortalID(channelID, topicID)}
+	portal, err := ce.Bridge.GetPortalByKey(ce.Ctx, portalKey)
 	if err != nil {
 		ce.Reply("Failed to get portal: %v", err)
 		return
@@ -159,7 +167,11 @@ func fnPlumbTopic(ce *commands.Event) {
 		return
 	}
 
-	existingPortal := ce.Bridge.GetPortalByMXID(ce.Ctx, ce.RoomID)
+	existingPortal, err := ce.Bridge.GetPortalByMXID(ce.Ctx, ce.RoomID)
+	if err != nil {
+		ce.Reply("Failed to check if room is already linked: %v", err)
+		return
+	}
 	if existingPortal != nil {
 		ce.Reply("This room is already linked to another portal: %s. Unbridge it first if you want to re-link it.", existingPortal.ID)
 		return
@@ -172,13 +184,133 @@ func fnPlumbTopic(ce *commands.Event) {
 		return
 	}
 
-	client := ce.UserLogin.Client.(*TelegramClient)
+	logins := ce.User.GetUserLogins()
+	if len(logins) == 0 {
+		ce.Reply("Successfully linked room, but you are not logged in to fetch topic info. You may need to manually sync the room later.")
+		return
+	}
+	client := logins[0].Client.(*TelegramClient)
 	info, err := client.GetChatInfo(ce.Ctx, portal)
 	if err != nil {
 		ce.Reply("Successfully linked room, but failed to fetch topic info: %v. You may need to manually sync the room.", err)
 		return
 	}
 
-	portal.UpdateInfo(ce.Ctx, info, ce.UserLogin, nil, time.Time{})
+	portal.UpdateInfo(ce.Ctx, info, logins[0], nil, time.Time{})
 	ce.Reply("Successfully linked this room to topic %d in channel %d.", topicID, channelID)
+}
+
+var cmdSetRelaySpace = &commands.FullHandler{
+	Func: fnSetRelaySpace,
+	Name: "set-relay-space",
+	Help: commands.HelpMeta{
+		Section:     commands.HelpSectionChats,
+		Description: "Set the default relay on this portal and all its child topic rooms.",
+	},
+	RequiresPortal: true,
+	RequiresAdmin:  true,
+}
+
+func fnSetRelaySpace(ce *commands.Event) {
+	if !ce.Bridge.Config.Relay.Enabled {
+		ce.Reply("This bridge does not allow relay mode")
+		return
+	}
+	if len(ce.Bridge.Config.Relay.DefaultRelays) == 0 {
+		ce.Reply("No default_relays configured in bridge config")
+		return
+	}
+
+	// If run from a topic room, walk up to the parent space first
+	spacePortal := ce.Portal
+	if ce.Portal.ParentKey.ID != "" {
+		parent, err := ce.Bridge.GetPortalByKey(ce.Ctx, ce.Portal.ParentKey)
+		if err == nil && parent != nil {
+			spacePortal = parent
+		}
+	}
+
+	// Collect the space plus all children
+	portals := []*bridgev2.Portal{spacePortal}
+	children, err := ce.Bridge.DB.Portal.GetChildren(ce.Ctx, spacePortal.PortalKey)
+	if err != nil {
+		ce.Reply("Failed to get child portals: %v", err)
+		return
+	}
+	for _, child := range children {
+		p, err := ce.Bridge.GetPortalByKey(ce.Ctx, child.PortalKey)
+		if err != nil || p == nil {
+			continue
+		}
+		portals = append(portals, p)
+	}
+
+	// Find the relay login from default_relays — look in the space portal,
+	// since the relay user's login is tracked against the main channel, not topics.
+	logins, err := ce.Bridge.GetUserLoginsInPortal(ce.Ctx, spacePortal.PortalKey)
+	if err != nil {
+		ce.Reply("Failed to get logins in portal: %v", err)
+		return
+	}
+	var relay *bridgev2.UserLogin
+	for _, loginID := range ce.Bridge.Config.Relay.DefaultRelays {
+		for _, login := range logins {
+			if login.ID == loginID {
+				relay = login
+				break
+			}
+		}
+		if relay != nil {
+			break
+		}
+	}
+	if relay == nil {
+		ce.Reply("None of the configured default relay users are in this portal")
+		return
+	}
+
+	callLinks := ce.Bridge.Network.(*TelegramConnector).Config.Relay.CallLinks
+
+	// Child rooms get join_rule: restricted (space members only).
+	// The space itself is left alone — set it public manually via Element if desired.
+	var childJoinRule *event.JoinRulesEventContent
+	if spacePortal.MXID != "" {
+		childJoinRule = &event.JoinRulesEventContent{
+			JoinRule: event.JoinRuleRestricted,
+			Allow: []event.JoinRuleAllow{{
+				Type:   event.JoinRuleAllowRoomMembership,
+				RoomID: spacePortal.MXID,
+			}},
+		}
+	}
+
+	var set, failed int
+	for _, p := range portals {
+		if err := p.SetRelay(ce.Ctx, relay); err != nil {
+			failed++
+			continue
+		}
+		set++
+		if p.MXID == "" {
+			continue
+		}
+		// Only apply restricted join rule to child rooms, not the space itself.
+		if p.ID != spacePortal.ID && childJoinRule != nil {
+			_, _ = ce.Bridge.Bot.SendState(ce.Ctx, p.MXID, event.StateJoinRules, "", &event.Content{
+				Parsed: childJoinRule,
+			}, time.Time{})
+		}
+		if callLinks {
+			_, _ = ce.Bridge.Bot.SendState(ce.Ctx, p.MXID, event.StateGuestAccess, "", &event.Content{
+				Parsed: &event.GuestAccessEventContent{GuestAccess: event.GuestAccessCanJoin},
+			}, time.Time{})
+		}
+	}
+	ce.Reply(fmt.Sprintf("Set relay to %s on %d room(s)%s", relay.RemoteName, set,
+		func() string {
+			if failed > 0 {
+				return fmt.Sprintf(", failed on %d", failed)
+			}
+			return ""
+		}()))
 }
