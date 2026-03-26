@@ -62,6 +62,7 @@ type PortalMetadata struct {
 	LastSync          jsontime.Unix `json:"last_sync,omitempty"`
 	FullSynced        bool          `json:"full_synced,omitempty"`
 	ParticipantsCount int           `json:"member_count,omitempty"`
+	EncryptionEnabled bool          `json:"encryption_enabled,omitempty"`
 }
 
 func (pm *PortalMetadata) SetIsSuperGroup(isSupergroup bool) (changed bool) {

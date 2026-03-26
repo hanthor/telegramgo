@@ -31,6 +31,7 @@ import (
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/bridgev2/simplevent"
 	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
 
 	"go.mau.fi/mautrix-telegram/pkg/connector/ids"
 	"go.mau.fi/mautrix-telegram/pkg/connector/media"
@@ -109,7 +110,7 @@ func (t *TelegramClient) getDMChatInfo(ctx context.Context, userID int64) (*brid
 			PowerLevels: t.getDMPowerLevels(ghost),
 		},
 		CanBackfill:  !t.metadata.IsBot,
-		ExtraUpdates: updatePortalLastSyncAt,
+		ExtraUpdates: bridgev2.MergeExtraUpdaters(updatePortalLastSyncAt, t.enableEncryptionUpdater()),
 	}
 	chatInfo.Members.MemberMap.Add(bridgev2.ChatMember{EventSender: t.mySender()})
 	chatInfo.Members.MemberMap.Add(bridgev2.ChatMember{EventSender: t.senderForUserID(userID)})
@@ -426,6 +427,26 @@ func markFullSynced(ctx context.Context, portal *bridgev2.Portal) bool {
 		return true
 	}
 	return false
+}
+
+// enableEncryptionUpdater returns an ExtraUpdater that enables encryption in a
+// DM portal room once and records it in metadata to avoid redundant state events.
+func (t *TelegramClient) enableEncryptionUpdater() bridgev2.ExtraUpdater[*bridgev2.Portal] {
+	return func(ctx context.Context, portal *bridgev2.Portal) bool {
+		meta := portal.Metadata.(*PortalMetadata)
+		if portal.MXID == "" || meta.EncryptionEnabled {
+			return false
+		}
+		_, err := t.main.Bridge.Bot.SendState(ctx, portal.MXID, event.StateEncryption, "", &event.Content{
+			Parsed: &event.EncryptionEventContent{Algorithm: id.AlgorithmMegolmV1},
+		}, time.Time{})
+		if err != nil {
+			zerolog.Ctx(ctx).Err(err).Msg("Failed to enable encryption in DM portal")
+			return false
+		}
+		meta.EncryptionEnabled = true
+		return true
+	}
 }
 
 func (t *TelegramClient) avatarFromPhoto(ctx context.Context, peerType ids.PeerType, peerID int64, photo tg.PhotoClass) *bridgev2.Avatar {
