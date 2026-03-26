@@ -245,8 +245,9 @@ func fnSetRelaySpace(ce *commands.Event) {
 		portals = append(portals, p)
 	}
 
-	// Find the relay login from default_relays
-	logins, err := ce.Bridge.GetUserLoginsInPortal(ce.Ctx, ce.Portal.PortalKey)
+	// Find the relay login from default_relays — look in the space portal,
+	// since the relay user's login is tracked against the main channel, not topics.
+	logins, err := ce.Bridge.GetUserLoginsInPortal(ce.Ctx, spacePortal.PortalKey)
 	if err != nil {
 		ce.Reply("Failed to get logins in portal: %v", err)
 		return
@@ -268,16 +269,12 @@ func fnSetRelaySpace(ce *commands.Event) {
 		return
 	}
 
-	cfg := ce.Bridge.Network.(*TelegramConnector).Config.Relay
-	publicPortals := cfg.PublicPortals
-	callLinks := cfg.CallLinks
+	callLinks := ce.Bridge.Network.(*TelegramConnector).Config.Relay.CallLinks
 
-	// If public_portals is enabled:
-	//   - space itself gets join_rule: public
-	//   - child rooms get join_rule: restricted (space members only)
-	var spaceJoinRule, childJoinRule *event.JoinRulesEventContent
-	if publicPortals && spacePortal.MXID != "" {
-		spaceJoinRule = &event.JoinRulesEventContent{JoinRule: event.JoinRulePublic}
+	// Child rooms get join_rule: restricted (space members only).
+	// The space itself is left alone — set it public manually via Element if desired.
+	var childJoinRule *event.JoinRulesEventContent
+	if spacePortal.MXID != "" {
 		childJoinRule = &event.JoinRulesEventContent{
 			JoinRule: event.JoinRuleRestricted,
 			Allow: []event.JoinRuleAllow{{
@@ -297,15 +294,10 @@ func fnSetRelaySpace(ce *commands.Event) {
 		if p.MXID == "" {
 			continue
 		}
-		var joinRule *event.JoinRulesEventContent
-		if p.ID == spacePortal.ID {
-			joinRule = spaceJoinRule
-		} else {
-			joinRule = childJoinRule
-		}
-		if joinRule != nil {
+		// Only apply restricted join rule to child rooms, not the space itself.
+		if p.ID != spacePortal.ID && childJoinRule != nil {
 			_, _ = ce.Bridge.Bot.SendState(ce.Ctx, p.MXID, event.StateJoinRules, "", &event.Content{
-				Parsed: joinRule,
+				Parsed: childJoinRule,
 			}, time.Time{})
 		}
 		if callLinks {

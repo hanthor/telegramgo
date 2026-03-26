@@ -54,7 +54,6 @@ type DeviceInfo struct {
 
 type RelayConfig struct {
 	RelayReactions bool `yaml:"relay_reactions"`
-	PublicPortals  bool `yaml:"public_portals"`
 	CallLinks      bool `yaml:"call_links"`
 }
 
