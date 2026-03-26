@@ -33,6 +33,7 @@ import (
 	"maunium.net/go/mautrix/event"
 
 	"go.mau.fi/mautrix-telegram/pkg/connector/ids"
+	"go.mau.fi/mautrix-telegram/pkg/connector/media"
 	"go.mau.fi/mautrix-telegram/pkg/gotd/tg"
 )
 
@@ -221,6 +222,25 @@ func (t *TelegramClient) overrideChatInfoWithTopic(info *bridgev2.ChatInfo, topi
 	info.Name = ptr.Ptr(topic.Title + " - " + *info.Name)
 	if topic.Closed {
 		info.Members.PowerLevels.EventsDefault = nobodyPowerLevel
+	}
+	if emojiID, ok := topic.GetIconEmojiID(); ok && emojiID != 0 {
+		info.Avatar = t.avatarFromTopicEmoji(emojiID)
+	}
+}
+
+func (t *TelegramClient) avatarFromTopicEmoji(emojiID int64) *bridgev2.Avatar {
+	return &bridgev2.Avatar{
+		ID: networkid.AvatarID(fmt.Sprintf("emoji:%d", emojiID)),
+		Get: func(ctx context.Context) ([]byte, error) {
+			docs, err := t.client.API().MessagesGetCustomEmojiDocuments(ctx, []int64{emojiID})
+			if err != nil {
+				return nil, fmt.Errorf("failed to fetch custom emoji document: %w", err)
+			}
+			if len(docs) == 0 {
+				return nil, fmt.Errorf("no documents returned for emoji %d", emojiID)
+			}
+			return media.NewTransferer(t.client.API()).WithDocument(docs[0], true).DownloadBytes(ctx)
+		},
 	}
 }
 
