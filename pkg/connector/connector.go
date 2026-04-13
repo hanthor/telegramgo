@@ -42,7 +42,8 @@ func (tg *TelegramConnector) Init(bridge *bridgev2.Bridge) {
 	tg.Store = store.NewStore(bridge.DB.Database, dbutil.ZeroLogger(bridge.Log.With().Str("db_section", "telegram").Logger()))
 	tg.Bridge = bridge
 	processor := tg.Bridge.Commands.(*commands.Processor)
-	processor.AddHandlers(cmdSync, cmdPlumbTopic)
+	processor.AddHandlers(cmdSync, cmdPlumbTopic, cmdSetRelaySpace)
+	tg.registerCallHandlers()
 }
 
 func (tg *TelegramConnector) Start(ctx context.Context) error {

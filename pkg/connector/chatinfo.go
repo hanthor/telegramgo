@@ -31,8 +31,10 @@ import (
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/bridgev2/simplevent"
 	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
 
 	"go.mau.fi/mautrix-telegram/pkg/connector/ids"
+	"go.mau.fi/mautrix-telegram/pkg/connector/media"
 	"go.mau.fi/mautrix-telegram/pkg/gotd/tg"
 )
 
@@ -108,7 +110,7 @@ func (t *TelegramClient) getDMChatInfo(ctx context.Context, userID int64) (*brid
 			PowerLevels: t.getDMPowerLevels(ghost),
 		},
 		CanBackfill:  !t.metadata.IsBot,
-		ExtraUpdates: updatePortalLastSyncAt,
+		ExtraUpdates: bridgev2.MergeExtraUpdaters(updatePortalLastSyncAt, t.enableEncryptionUpdater()),
 	}
 	chatInfo.Members.MemberMap.Add(bridgev2.ChatMember{EventSender: t.mySender()})
 	chatInfo.Members.MemberMap.Add(bridgev2.ChatMember{EventSender: t.senderForUserID(userID)})
@@ -221,6 +223,25 @@ func (t *TelegramClient) overrideChatInfoWithTopic(info *bridgev2.ChatInfo, topi
 	info.Name = ptr.Ptr(topic.Title + " - " + *info.Name)
 	if topic.Closed {
 		info.Members.PowerLevels.EventsDefault = nobodyPowerLevel
+	}
+	if emojiID, ok := topic.GetIconEmojiID(); ok && emojiID != 0 {
+		info.Avatar = t.avatarFromTopicEmoji(emojiID)
+	}
+}
+
+func (t *TelegramClient) avatarFromTopicEmoji(emojiID int64) *bridgev2.Avatar {
+	return &bridgev2.Avatar{
+		ID: networkid.AvatarID(fmt.Sprintf("emoji:%d", emojiID)),
+		Get: func(ctx context.Context) ([]byte, error) {
+			docs, err := t.client.API().MessagesGetCustomEmojiDocuments(ctx, []int64{emojiID})
+			if err != nil {
+				return nil, fmt.Errorf("failed to fetch custom emoji document: %w", err)
+			}
+			if len(docs) == 0 {
+				return nil, fmt.Errorf("no documents returned for emoji %d", emojiID)
+			}
+			return media.NewTransferer(t.client.API()).WithDocument(docs[0], true).DownloadBytes(ctx)
+		},
 	}
 }
 
@@ -408,6 +429,26 @@ func markFullSynced(ctx context.Context, portal *bridgev2.Portal) bool {
 	return false
 }
 
+// enableEncryptionUpdater returns an ExtraUpdater that enables encryption in a
+// DM portal room once and records it in metadata to avoid redundant state events.
+func (t *TelegramClient) enableEncryptionUpdater() bridgev2.ExtraUpdater[*bridgev2.Portal] {
+	return func(ctx context.Context, portal *bridgev2.Portal) bool {
+		meta := portal.Metadata.(*PortalMetadata)
+		if portal.MXID == "" || meta.EncryptionEnabled {
+			return false
+		}
+		_, err := t.main.Bridge.Bot.SendState(ctx, portal.MXID, event.StateEncryption, "", &event.Content{
+			Parsed: &event.EncryptionEventContent{Algorithm: id.AlgorithmMegolmV1},
+		}, time.Time{})
+		if err != nil {
+			zerolog.Ctx(ctx).Err(err).Msg("Failed to enable encryption in DM portal")
+			return false
+		}
+		meta.EncryptionEnabled = true
+		return true
+	}
+}
+
 func (t *TelegramClient) avatarFromPhoto(ctx context.Context, peerType ids.PeerType, peerID int64, photo tg.PhotoClass) *bridgev2.Avatar {
 	if photo == nil {
 		zerolog.Ctx(ctx).Trace().Msg("Chat photo is nil, returning no avatar")
@@ -473,12 +514,31 @@ func (t *TelegramClient) filterChannelParticipants(participants []tg.ChannelPart
 	}
 }
 
+func (t *TelegramClient) applyPublicJoinRule(portal *bridgev2.Portal, info *bridgev2.ChatInfo) {
+	// Only apply restricted join rule to child rooms (topics) that have a relay set.
+	// The space itself is left alone — make it public manually via Element if desired.
+	if portal.RelayLoginID == "" || portal.ParentKey.ID == "" {
+		return
+	}
+	parentPortal, err := t.main.Bridge.GetPortalByKey(context.Background(), portal.ParentKey)
+	if err == nil && parentPortal != nil && parentPortal.MXID != "" {
+		info.JoinRule = &event.JoinRulesEventContent{
+			JoinRule: event.JoinRuleRestricted,
+			Allow: []event.JoinRuleAllow{{
+				Type:   event.JoinRuleAllowRoomMembership,
+				RoomID: parentPortal.MXID,
+			}},
+		}
+	}
+}
+
 func (t *TelegramClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*bridgev2.ChatInfo, error) {
 	peerType, id, topicID, err := ids.ParsePortalID(portal.ID)
 	if err != nil {
 		return nil, err
 	}
 
+	var info *bridgev2.ChatInfo
 	switch peerType {
 	case ids.PeerTypeUser:
 		return t.getDMChatInfo(ctx, id)
@@ -489,8 +549,10 @@ func (t *TelegramClient) GetChatInfo(ctx context.Context, portal *bridgev2.Porta
 		if err != nil {
 			return nil, err
 		}
-		info, _, err := t.wrapFullChatInfo(portal.ID, fullChat)
-		return info, err
+		info, _, err = t.wrapFullChatInfo(portal.ID, fullChat)
+		if err != nil {
+			return nil, err
+		}
 	case ids.PeerTypeChannel:
 		accessHash, err := t.ScopedStore.GetAccessHash(ctx, ids.PeerTypeChannel, id)
 		if err != nil {
@@ -510,31 +572,32 @@ func (t *TelegramClient) GetChatInfo(ctx context.Context, portal *bridgev2.Porta
 			if err != nil {
 				return nil, err
 			}
-			info, _, err := t.wrapChatInfo(portal.ID, channel)
+			info, _, err = t.wrapChatInfo(portal.ID, channel)
 			if err != nil {
 				return nil, err
 			}
 			t.overrideChatInfoWithTopic(info, topic)
-			return info, nil
+		} else {
+			fullChat, err := APICallWithUpdates(ctx, t, func() (*tg.MessagesChatFull, error) {
+				return t.client.API().ChannelsGetFullChannel(ctx, &tg.InputChannel{ChannelID: id, AccessHash: accessHash})
+			})
+			if err != nil {
+				return nil, err
+			}
+			var mfm *memberFetchMeta
+			info, mfm, err = t.wrapFullChatInfo(portal.ID, fullChat)
+			if err != nil {
+				return nil, err
+			}
+			if err = t.fillChannelMembers(ctx, mfm, info.Members); err != nil {
+				zerolog.Ctx(ctx).Err(err).Msg("Failed to get channel members")
+			}
 		}
-		fullChat, err := APICallWithUpdates(ctx, t, func() (*tg.MessagesChatFull, error) {
-			return t.client.API().ChannelsGetFullChannel(ctx, &tg.InputChannel{ChannelID: id, AccessHash: accessHash})
-		})
-		if err != nil {
-			return nil, err
-		}
-		info, mfm, err := t.wrapFullChatInfo(portal.ID, fullChat)
-		if err != nil {
-			return nil, err
-		}
-		err = t.fillChannelMembers(ctx, mfm, info.Members)
-		if err != nil {
-			zerolog.Ctx(ctx).Err(err).Msg("Failed to get channel members")
-		}
-		return info, nil
 	default:
 		return nil, fmt.Errorf("unsupported peer type %s", peerType)
 	}
+	t.applyPublicJoinRule(portal, info)
+	return info, nil
 }
 
 func (t *TelegramClient) syncTopics(ctx context.Context, portal *bridgev2.Portal, channelID int64) error {
@@ -560,7 +623,11 @@ func (t *TelegramClient) syncTopics(ctx context.Context, portal *bridgev2.Portal
 		topicID := topicObj.ID
 		portalKey := t.makePortalKeyFromID(ids.PeerTypeChannel, channelID, topicID)
 
-		info, err := t.GetChatInfo(ctx, &bridgev2.Portal{ID: portalKey.ID, Metadata: &PortalMetadata{}})
+		portal, err := t.main.Bridge.GetPortalByKey(ctx, portalKey)
+		if err != nil {
+			continue
+		}
+		info, err := t.GetChatInfo(ctx, portal)
 		if err != nil {
 			continue
 		}

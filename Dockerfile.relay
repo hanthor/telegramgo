@@ -1,0 +1,23 @@
+FROM golang:1.25-alpine AS builder
+
+RUN apk add --no-cache git musl-dev gcc libwebp-dev
+
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=1 go build -ldflags="-s -w" -tags "goolm netgo osusergo static_build" -o mautrix-telegram ./cmd/mautrix-telegram
+
+FROM alpine:3.21
+
+RUN apk add --no-cache ffmpeg su-exec ca-certificates bash jq curl yq-go libwebp
+
+COPY --from=builder /build/mautrix-telegram /usr/bin/mautrix-telegram
+COPY ./docker-run.sh /docker-run.sh
+RUN mkdir -p /etc/mautrix
+ENV BRIDGEV2=1
+VOLUME /data
+WORKDIR /data
+
+CMD ["/docker-run.sh"]
